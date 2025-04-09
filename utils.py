@@ -189,7 +189,7 @@ def writeTmpLayer(layer, restrictToExtent, iface, extent):
         uri += '&field=' + fieldName + ":" + fieldType + "(%d)" % fieldLength
     newlayer = QgsVectorLayer(uri, layer.name(), 'memory')
     writer = newlayer.dataProvider()
-    outFeat = QgsFeature()
+    
     if restrictToExtent and extent == "Canvas extent":
         canvas = iface.mapCanvas()
         extent = canvas.extent()
@@ -207,6 +207,7 @@ def writeTmpLayer(layer, restrictToExtent, iface, extent):
     else:
         features = layer.getFeatures()
     for feature in features:
+        outFeat = QgsFeature()
         if feature.geometry() is not None:
             outFeat.setGeometry(feature.geometry())
         attrs = [feature[f] for f in usedFields]
