@@ -335,7 +335,49 @@ function onSingleClickFeatures(evt) {
                         popupText += '<li><table>';
                         popupText += '<a><b>' + layer.get('popuplayertitle') + '</b></a>';
                         popupText += createPopupField(currentFeature, currentFeatureKeys, layer);
-                        popupText += '</table></li>';    
+                        // Add related data here
+                        var relatedDataString = currentFeature.get('qgis2web_related_data');
+                        if (relatedDataString) {
+                            try {
+                                var relatedData = JSON.parse(relatedDataString);
+                                if (relatedData && relatedData.qgis2web_related_data && Object.keys(relatedData.qgis2web_related_data).length > 0) {
+                                    popupText += '<tr><td colspan="2"><hr><h4>Related Data</h4></td></tr>'; // Add separator and header within the table structure
+                                    for (var relationName in relatedData.qgis2web_related_data) {
+                                        var relatedFeatures = relatedData.qgis2web_related_data[relationName];
+                                        if (relatedFeatures && relatedFeatures.length > 0) {
+                                            // Use relation name as a sub-header (replace underscores)
+                                            popupText += '<tr><td colspan="2"><h5>' + relationName.replace(/_/g, ' ') + ' (' + relatedFeatures.length + ')</h5></td></tr>';
+                                            // Add table header row
+                                            var headers = Object.keys(relatedFeatures[0]);
+                                            popupText += '<tr>';
+                                            headers.forEach(function(header) {
+                                                 if (!header.startsWith('qgis2web_')) { // Skip internal fields
+                                                    popupText += '<th>' + header + '</th>';
+                                                }
+                                            });
+                                            popupText += '</tr>';
+                                            // Add table body rows
+                                            relatedFeatures.forEach(function(feat) {
+                                                popupText += '<tr>';
+                                                headers.forEach(function(header) {
+                                                     if (!header.startsWith('qgis2web_')) {
+                                                        var val = feat[header];
+                                                        val = (val !== null && val !== undefined) ? autolinker.link(String(val)) : '';
+                                                        popupText += '<td>' + val + '</td>';
+                                                    }
+                                                });
+                                                popupText += '</tr>';
+                                            });
+                                        }
+                                    }
+                                }
+                            } catch (e) {
+                                console.error("Error parsing or displaying related data: ", e);
+                                // popupText += '<tr><td colspan="2" style="color:red;">Error displaying related data.</td></tr>';
+                            }
+                        }
+                        // Close the main table for the feature
+                        popupText += '</table></li>';
                     }
                 }
             } else {
@@ -344,7 +386,46 @@ function onSingleClickFeatures(evt) {
                     popupText += '<li><table>';
                     popupText += '<a><b>' + layer.get('popuplayertitle') + '</b></a>';
                     popupText += createPopupField(currentFeature, currentFeatureKeys, layer);
-                    popupText += '</table>';
+                     // Add related data here (same logic as above for non-clustered features)
+                    var relatedDataString = currentFeature.get('qgis2web_related_data');
+                    if (relatedDataString) {
+                        try {
+                            var relatedData = JSON.parse(relatedDataString);
+                             if (relatedData && relatedData.qgis2web_related_data && Object.keys(relatedData.qgis2web_related_data).length > 0) {
+                                popupText += '<tr><td colspan="2"><hr><h4>Related Data</h4></td></tr>';
+                                for (var relationName in relatedData.qgis2web_related_data) {
+                                    var relatedFeatures = relatedData.qgis2web_related_data[relationName];
+                                    if (relatedFeatures && relatedFeatures.length > 0) {
+                                        popupText += '<tr><td colspan="2"><h5>' + relationName.replace(/_/g, ' ') + ' (' + relatedFeatures.length + ')</h5></td></tr>';
+                                        var headers = Object.keys(relatedFeatures[0]);
+                                        popupText += '<tr>';
+                                        headers.forEach(function(header) {
+                                             if (!header.startsWith('qgis2web_')) {
+                                                popupText += '<th>' + header + '</th>';
+                                            }
+                                        });
+                                        popupText += '</tr>';
+                                        relatedFeatures.forEach(function(feat) {
+                                            popupText += '<tr>';
+                                            headers.forEach(function(header) {
+                                                 if (!header.startsWith('qgis2web_')) {
+                                                    var val = feat[header];
+                                                    val = (val !== null && val !== undefined) ? autolinker.link(String(val)) : '';
+                                                    popupText += '<td>' + val + '</td>';
+                                                }
+                                            });
+                                            popupText += '</tr>';
+                                        });
+                                    }
+                                }
+                            }
+                        } catch (e) {
+                            console.error("Error parsing or displaying related data: ", e);
+                            // popupText += '<tr><td colspan="2" style="color:red;">Error displaying related data.</td></tr>';
+                        }
+                    }
+                    // Close the main table for the feature
+                    popupText += '</table></li>'; // Changed from </table> to </table></li> to match clustered logic
                 }
             }
         }
