@@ -105,7 +105,7 @@ class LeafletWriter(Writer):
             baseMap = self.baseMap,
             params=self.params,
             folder=dest_folder,
-            layersData=self.layersData) # Pass layersData here
+            exportRelatedList=self.exportRelated) # Pass exportRelated list here
         result = WriterResult()
         result.index_file = self.preview_file
         result.folder = os.path.dirname(self.preview_file)
@@ -117,8 +117,8 @@ class LeafletWriter(Writer):
     def writeLeaflet(
             cls, iface, feedback, folder,
             layer_list, groups, visible, interactive, cluster,
-            # Add layersData parameter
-            json, getFeatureInfo, baseMap, params, popup, layersData):
+            # Changed layersData parameter
+            json, getFeatureInfo, baseMap, params, popup, exportRelatedList):
         outputProjectFileName = folder
         QApplication.setOverrideCursor(QCursor(Qt.WaitCursor))
         legends = {}
@@ -196,8 +196,8 @@ class LeafletWriter(Writer):
                 if layer.type() == QgsMapLayer.VectorLayer and vts is None:
                     feedback.showFeedback('Exporting %s to JSON...' %
                                           layer.name())
-                    # Get exportRelated flag for this layer from layersData
-                    exportRelated = layersData.get(layer.id(), {}).get("exportRelated", False)
+                    # Get exportRelated flag from the corresponding index in exportRelatedList
+                    exportRelated = exportRelatedList[lyrCount] if lyrCount < len(exportRelatedList) else False
                     exportVector(layer, safeLayerName, dataStore,
                                  restrictToExtent, iface, extent, precision,
                                  exp_crs, minify, exportRelated) # Pass exportRelated flag

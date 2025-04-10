@@ -349,15 +349,14 @@ def writeTmpLayer(layer, restrictToExtent, iface, extent, exportRelated=False): 
 
 
 def exportLayers(iface, layers, folder, precision, optimize, popupField, json,
-                 restrictToExtent, extent, feedback, matchCRS, layersData): # Added layersData
+                 restrictToExtent, extent, feedback, matchCRS, exportRelatedList): # Changed layersData to exportRelatedList
     feedback.showFeedback('Exporting layers...')
     layersFolder = os.path.join(folder, "layers")
     QDir().mkpath(layersFolder)
     for count, (layer, encode2json, popup) in enumerate(zip(layers, json, popupField)):
         sln = safeName(layer.name()) + "_" + str(count)
-        layer_id = layer.id() # Get layer ID for lookup
-        # Get exportRelated flag from layersData (default to False if not found)
-        exportRelated = layersData.get(layer_id, {}).get("exportRelated", False)
+        # Get exportRelated flag from the corresponding index in exportRelatedList
+        exportRelated = exportRelatedList[count] if count < len(exportRelatedList) else False
 
         vts = layer.customProperty("VectorTilesReader/vector_tile_source")
         if (layer.type() == layer.VectorLayer and vts is None and
