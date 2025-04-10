@@ -20,11 +20,13 @@ import time
 import re
 import shutil
 import sys
+import json
 from io import StringIO
-from qgis.PyQt.QtCore import QDir, QVariant
+from qgis.PyQt.QtCore import QDir, QVariant, Qt # Added Qt for ISODate
 from qgis.PyQt.QtGui import QPainter
 from qgis.core import (QgsApplication,
-                       QgsProject,
+                       QgsProject, 
+                       QgsRelation,
                        QgsCoordinateReferenceSystem,
                        QgsCoordinateTransform,
                        QgsVectorLayer,
@@ -148,7 +150,99 @@ def getUsedFields(layer):
     return fields
 
 
-def writeTmpLayer(layer, restrictToExtent, iface, extent):
+def get_related_data(layer, feature):
+    """
+    Fetches related data for a given feature based on relations defined in the QGIS project.
+
+    Args:
+        layer (QgsVectorLayer): The parent layer.
+        feature (QgsFeature): The parent feature.
+
+    Returns:
+        dict: A dictionary structured as {'qgis2web_related_data': {'relation_name1': [attr_dict1, ...], 'relation_name2': [...]}}
+              Returns an empty dict if no relations or related features are found.
+    """
+    related_data_map = {}
+    all_relations_data = {}
+    relation_manager = QgsProject.instance().relationManager()
+    # Ensure layer ID is valid before querying relations
+    if not layer or not layer.isValid() or not layer.id():
+        return related_data_map
+
+    layer_relations = relation_manager.relationsForLayer(layer.id())
+
+    if not layer_relations:
+        return related_data_map
+
+    for relation in layer_relations.values():
+        # Ensure the current layer is the referencing layer in the relation
+        if relation.referencingLayer() and relation.referencingLayer().id() == layer.id():
+            relation_name_sanitized = safeName(relation.name()) # Use existing safeName function
+            related_features_data = []
+            # Use the feature's specific value for the referencing field
+            try:
+                request = relation.getRelatedFeaturesRequest(feature)
+            except Exception as e:
+                QgsMessageLog.logMessage(f"Error getting related features request for relation '{relation.name()}': {e}", "qgis2web", level=Qgis.Warning)
+                continue # Skip this relation if request fails
+
+            related_layer = relation.referencedLayer() # The layer containing child features
+
+            if not related_layer or not related_layer.isValid():
+                QgsMessageLog.logMessage(f"Relation '{relation.name()}' points to an invalid referenced layer.", "qgis2web", level=Qgis.Warning)
+                continue # Skip if related layer is invalid
+
+            try:
+                related_layer_fields = related_layer.fields() # Get fields once
+                field_names = [field.name() for field in related_layer_fields]
+                for related_feature in related_layer.getFeatures(request):
+                    attributes = related_feature.attributes()
+                    # Ensure attributes list length matches field names length
+                    if len(attributes) != len(field_names):
+                         QgsMessageLog.logMessage(f"Attribute count mismatch for feature {related_feature.id()} in layer '{related_layer.name()}'. Skipping feature.", "qgis2web", level=Qgis.Warning)
+                         continue
+
+                    feature_attributes_dict = {}
+                    for i, field_name in enumerate(field_names):
+                        value = attributes[i]
+                        # Basic handling for QVariant types for JSON serialization
+                        if isinstance(value, QVariant):
+                            # Attempt conversion, handle None/NULL explicitly
+                            if value.isNull() or not value.isValid():
+                                feature_attributes_dict[field_name] = None
+                            elif value.type() == QVariant.Date or value.type() == QVariant.DateTime or value.type() == QVariant.Time:
+                                # Use ISO format for dates/times if Qt is available
+                                try:
+                                     feature_attributes_dict[field_name] = value.toString(Qt.ISODate)
+                                except NameError: # Fallback if Qt not imported or available
+                                     feature_attributes_dict[field_name] = value.toString()
+                            elif value.canConvert(QVariant.String):
+                                feature_attributes_dict[field_name] = value.toString()
+                            else:
+                                # Fallback for types that can't be easily converted to string
+                                feature_attributes_dict[field_name] = f"Unsupported type: {value.typeName()}"
+                        else:
+                             # Handle potential non-QVariant types if necessary (e.g., None directly)
+                             feature_attributes_dict[field_name] = value
+
+                    related_features_data.append(feature_attributes_dict)
+            except Exception as e:
+                 QgsMessageLog.logMessage(f"Error processing features for relation '{relation.name()}' on layer '{related_layer.name()}': {e}", "qgis2web", level=Qgis.Warning)
+                 continue # Skip this relation if feature processing fails
+
+
+            if related_features_data:
+                all_relations_data[relation_name_sanitized] = related_features_data
+
+    if all_relations_data:
+        # Nest all relation data under the main key 'qgis2web_related_data'
+        related_data_map['qgis2web_related_data'] = all_relations_data
+
+    return related_data_map
+
+
+
+def writeTmpLayer(layer, restrictToExtent, iface, extent, exportRelated=False): # Added exportRelated flag
     if layer.wkbType() == QgsWkbTypes.NoGeometry:
         return
 
@@ -187,8 +281,18 @@ def writeTmpLayer(layer, restrictToExtent, iface, extent):
         else:
             fieldType = "string"
         uri += '&field=' + fieldName + ":" + fieldType + "(%d)" % fieldLength
+    # Add related data field to URI if export is enabled
+    if exportRelated:
+        # Increase size significantly to accommodate potentially large JSON strings
+        uri += '&field=qgis2web_related_data:string(50000)'
     newlayer = QgsVectorLayer(uri, layer.name(), 'memory')
+    if not newlayer.isValid():
+        QgsMessageLog.logMessage(f"Failed to create memory layer for {layer.name()}", "qgis2web", level=Qgis.Critical)
+        return None # Return None if layer creation fails
     writer = newlayer.dataProvider()
+    related_data_field_index = -1
+    if exportRelated:
+        related_data_field_index = newlayer.fields().indexFromName("qgis2web_related_data")
     
     if restrictToExtent and extent == "Canvas extent":
         canvas = iface.mapCanvas()
@@ -211,27 +315,58 @@ def writeTmpLayer(layer, restrictToExtent, iface, extent):
         if feature.geometry() is not None:
             outFeat.setGeometry(feature.geometry())
         attrs = [feature[f] for f in usedFields]
+        # Fetch and add related data if enabled
+        if exportRelated and related_data_field_index != -1:
+            try:
+                related_data = get_related_data(layer, feature)
+                # Only add if related_data is not empty
+                if related_data:
+                    # Ensure complex objects are handled (like datetime) if not handled in get_related_data
+                    related_json = json.dumps(related_data, default=str)
+                    attrs.append(related_json)
+                else:
+                    attrs.append(None) # Append None or empty string if no related data
+            except Exception as e:
+                QgsMessageLog.logMessage(f"Error getting or serializing related data for feature {feature.id()} in layer {layer.name()}: {e}", "qgis2web", level=Qgis.Warning)
+                attrs.append(None) # Append None in case of error
+        elif exportRelated:
+             # Append None if exportRelated is true but index is bad (shouldn't happen often)
+             attrs.append(None)
+
         if attrs:
-            outFeat.setAttributes(attrs)
-        writer.addFeatures([outFeat])
+             # Ensure the number of attributes matches the number of fields in newlayer
+             if len(attrs) == len(newlayer.fields()):
+                 outFeat.setAttributes(attrs)
+             else:
+                  QgsMessageLog.logMessage(f"Attribute count mismatch when setting attributes for feature in {newlayer.name()}. Expected {len(newlayer.fields())}, got {len(attrs)}. Skipping feature.", "qgis2web", level=Qgis.Warning)
+                  continue # Skip adding this feature if attribute count is wrong
+
+        # Add feature to the temporary layer
+        success, added_features = writer.addFeatures([outFeat])
+        if not success:
+             QgsMessageLog.logMessage(f"Failed to add feature to temporary layer for {layer.name()}", "qgis2web", level=Qgis.Warning)
     return newlayer
 
 
 def exportLayers(iface, layers, folder, precision, optimize, popupField, json,
-                 restrictToExtent, extent, feedback, matchCRS):
+                 restrictToExtent, extent, feedback, matchCRS, layersData): # Added layersData
     feedback.showFeedback('Exporting layers...')
     layersFolder = os.path.join(folder, "layers")
     QDir().mkpath(layersFolder)
-    for count, (layer, encode2json, popup) in enumerate(zip(layers, json,
-                                                            popupField)):
+    for count, (layer, encode2json, popup) in enumerate(zip(layers, json, popupField)):
         sln = safeName(layer.name()) + "_" + str(count)
+        layer_id = layer.id() # Get layer ID for lookup
+        # Get exportRelated flag from layersData (default to False if not found)
+        exportRelated = layersData.get(layer_id, {}).get("exportRelated", False)
+
         vts = layer.customProperty("VectorTilesReader/vector_tile_source")
         if (layer.type() == layer.VectorLayer and vts is None and
                 (layer.providerType() != "WFS" or encode2json)):
             feedback.showFeedback('Exporting %s to JSON...' % layer.name())
             crs = QgsCoordinateReferenceSystem("EPSG:4326")
+            # Pass exportRelated flag to exportVector
             exportVector(layer, sln, layersFolder, restrictToExtent,
-                         iface, extent, precision, crs, optimize)
+                         iface, extent, precision, crs, optimize, exportRelated)
             feedback.completeStep()
         elif (layer.type() == layer.RasterLayer and
                 layer.providerType() != "wms"):
@@ -242,9 +377,14 @@ def exportLayers(iface, layers, folder, precision, optimize, popupField, json,
 
 
 def exportVector(layer, sln, layersFolder, restrictToExtent, iface,
-                 extent, precision, crs, minify):
+                  extent, precision, crs, minify, exportRelated=False): # Added exportRelated flag
     canvas = iface.mapCanvas()
-    cleanLayer = writeTmpLayer(layer, restrictToExtent, iface, extent)
+    # Pass the exportRelated flag to writeTmpLayer
+    cleanLayer = writeTmpLayer(layer, restrictToExtent, iface, extent, exportRelated)
+    # Check if cleanLayer was created successfully
+    if cleanLayer is None:
+        QgsMessageLog.logMessage(f"Skipping export for layer {layer.name()} due to temporary layer creation failure.", "qgis2web", level=Qgis.Warning)
+        return # Stop export for this layer if temp layer failed
     if is25d(layer, canvas, restrictToExtent, extent):
         add25dAttributes(cleanLayer, layer, canvas)
     tmpPath = os.path.join(layersFolder, sln + ".json")

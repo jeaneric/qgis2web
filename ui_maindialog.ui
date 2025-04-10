@@ -68,19 +68,24 @@
               <bool>true</bool>
              </property>
              <attribute name="headerVisible">
-              <bool>false</bool>
+              <bool>true</bool> <!-- Make header visible -->
              </attribute>
              <attribute name="headerDefaultSectionSize">
               <number>200</number>
              </attribute>
              <column>
               <property name="text">
-               <string notr="true">1</string>
+               <string>Layer</string> <!-- Set header text for column 1 -->
               </property>
              </column>
              <column>
               <property name="text">
-               <string>2</string>
+               <string>Popup</string> <!-- Set header text for column 2 -->
+              </property>
+             </column>
+             <column>
+              <property name="text">
+               <string>Related Data</string> <!-- Add header text for new column 3 -->
               </property>
              </column>
             </widget>

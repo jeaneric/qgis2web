@@ -94,7 +94,8 @@ class OpenLayersWriter(Writer):
                                          getFeatureInfo=self.getFeatureInfo,
                                          baseMap=self.baseMap,
                                          settings=self.params,
-                                         folder=dest_folder)
+                                         folder=dest_folder,
+                                         layersData=self.layersData) # Pass layersData
         result = WriterResult()
         result.index_file = self.preview_file
         result.folder = os.path.dirname(self.preview_file)
@@ -105,7 +106,7 @@ class OpenLayersWriter(Writer):
     @classmethod
     def writeOL(cls, iface, feedback, layers, groups, popup, visible,
                 interactive, json, clustered, getFeatureInfo, baseMap, settings,
-                folder):
+                folder, layersData): # Add layersData parameter
         QApplication.setOverrideCursor(QCursor(Qt.WaitCursor))
         mapSettings = iface.mapCanvas().mapSettings()
         controlCount = 0
@@ -136,7 +137,7 @@ class OpenLayersWriter(Writer):
 
         writeFiles(folder, restrictToExtent, feedback)
         exportLayers(iface, layers, folder, precision, optimize,
-                     popup, json, restrictToExtent, extent, feedback, matchCRS)
+                     popup, json, restrictToExtent, extent, feedback, matchCRS, layersData) # Pass layersData
         mapUnitsLayers = exportStyles(layers, folder, clustered, feedback)
         mapUnitLayers = getMapUnitLayers(mapUnitsLayers)
         osmb = writeLayersAndGroups(layers, groups, visible, interactive,

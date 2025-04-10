@@ -367,9 +367,11 @@ class MainDialog(QDialog, FORM_CLASS):
         in the dialog
         """
         writer = self.getWriterFactory()()
+        # Unpack the returned tuple including layersData
         (writer.layers, writer.groups, writer.popup,
          writer.visible, writer.interactive, writer.json,
-         writer.cluster, writer.getFeatureInfo, writer.baseMap) = self.getLayersAndGroups()
+         writer.cluster, writer.getFeatureInfo, writer.baseMap,
+         writer.layersData) = self.getLayersAndGroups() # Assign layersData to writer
         writer.params = self.getParameters()
         return writer
 
@@ -673,8 +675,9 @@ class MainDialog(QDialog, FORM_CLASS):
     def populateLayerSearch(self):
         self.layer_search_combo.clear()
         self.layer_search_combo.addItem("None")
+        # Adjust unpacking for populateLayerSearch
         (layers, groups, popup, visible, interactive,
-         json, cluster, getFeatureInfo, baseMap) = self.getLayersAndGroups()
+         json, cluster, getFeatureInfo, baseMap, _) = self.getLayersAndGroups() # Ignore layersData here
         for count, layer in enumerate(layers):
             if layer.type() == layer.VectorLayer:
                 options = []
@@ -695,8 +698,9 @@ class MainDialog(QDialog, FORM_CLASS):
 
     def populateAttrFilter(self):
         self.layer_filter_select.clear()
+        # Adjust unpacking for populateAttrFilter
         (layers, groups, popup, visible, interactive,
-         json, cluster, getFeatureInfo, baseMap) = self.getLayersAndGroups()
+         json, cluster, getFeatureInfo, baseMap, _) = self.getLayersAndGroups() # Ignore layersData here
         options = []
         for count, layer in enumerate(layers):
             if layer.type() == layer.VectorLayer:
@@ -860,6 +864,7 @@ class MainDialog(QDialog, FORM_CLASS):
         cluster = []
         getFeatureInfo = []
         baseMap = []
+        layersData = {} # Dictionary to store per-layer settings including exportRelated
         for i in range(self.layers_item.childCount()):
             item = self.layers_item.child(i)
             if isinstance(item, TreeLayerItem):
@@ -871,6 +876,21 @@ class MainDialog(QDialog, FORM_CLASS):
                     json.append(item.json)
                     cluster.append(item.cluster)
                     getFeatureInfo.append(item.getFeatureInfo)
+                    # Store data for this layer
+                    if item.layer and item.layer.isValid(): # Ensure layer is valid before getting ID
+                        layersData[item.layer.id()] = {
+                            "popup": item.popup,
+                            "visible": item.visible,
+                            "interactive": item.interactive,
+                            "json": item.json,
+                            "cluster": item.cluster,
+                            "getFeatureInfo": item.getFeatureInfo,
+                            "baseMap": item.baseMap,
+                            "exportRelated": item.exportRelated # Add the new property
+                        }
+                    else:
+                         QgsMessageLog.logMessage(f"Skipping invalid layer item in getLayersAndGroups.", "qgis2web", level=Qgis.Warning)
+
                     baseMap.append(item.baseMap)
             else:
                 group = item.name
@@ -890,6 +910,20 @@ class MainDialog(QDialog, FORM_CLASS):
                             cluster.append(allLayers.cluster)
                             getFeatureInfo.append(allLayers.getFeatureInfo)
                             baseMap.append(allLayers.baseMap)
+                            # Store data for this layer within a group
+                            if allLayers.layer and allLayers.layer.isValid(): # Ensure layer is valid
+                                layersData[allLayers.layer.id()] = {
+                                    "popup": allLayers.popup,
+                                    "visible": allLayers.visible,
+                                    "interactive": allLayers.interactive,
+                                    "json": allLayers.json,
+                                    "cluster": allLayers.cluster,
+                                    "getFeatureInfo": allLayers.getFeatureInfo,
+                                    "baseMap": allLayers.baseMap,
+                                    "exportRelated": allLayers.exportRelated # Add the new property
+                                }
+                            else:
+                                QgsMessageLog.logMessage(f"Skipping invalid layer item within group in getLayersAndGroups.", "qgis2web", level=Qgis.Warning)
                 groups[group] = groupLayers[::-1]
 
         layers = layers[::-1]
@@ -902,22 +936,34 @@ class MainDialog(QDialog, FORM_CLASS):
         getFeatureInfo = getFeatureInfo[::-1]
         baseMap = baseMap[::-1]
 
-        return (layers, groups, popup, visible, interactive, json, cluster, getFeatureInfo, baseMap)
+        # Return layersData dictionary along with other lists/dicts
+        return (layers, groups, popup, visible, interactive, json, cluster, getFeatureInfo, baseMap, layersData)
 
     def reject(self):
         self.saveParameters()
+        # Adjust unpacking for reject
         (layers, groups, popup, visible, interactive,
-         json, cluster, getFeatureInfo, baseMap) = self.getLayersAndGroups()
+         json, cluster, getFeatureInfo, baseMap, layersData) = self.getLayersAndGroups() # Get layersData
         try:
-            for layer, pop, vis, int in zip(layers, popup, visible,
-                                            interactive):
-                attrDict = {}
-                for attr in pop:
-                    attrDict['attr'] = pop[attr]
-                    layer.setCustomProperty("qgis2web/popup/" + attr,
-                                            pop[attr])
-                layer.setCustomProperty("qgis2web/Visible", vis)
-                layer.setCustomProperty("qgis2web/Interactive", int)
+            # Save custom properties using layersData for consistency
+            for layer_id, data in layersData.items():
+                layer = QgsProject.instance().mapLayer(layer_id)
+                if layer and layer.isValid(): # Ensure layer is valid before setting properties
+                    # Save popup settings
+                    for attr, setting in data.get("popup", {}).items():
+                        layer.setCustomProperty(f"qgis2web/popup/{attr}", setting)
+                    # Save other boolean settings
+                    layer.setCustomProperty("qgis2web/Visible", str(data.get("visible", True)).lower())
+                    layer.setCustomProperty("qgis2web/Interactive", str(data.get("interactive", True)).lower())
+                    layer.setCustomProperty("qgis2web/Encode to JSON", str(data.get("json", False)).lower())
+                    layer.setCustomProperty("qgis2web/Cluster", str(data.get("cluster", False)).lower())
+                    layer.setCustomProperty("qgis2web/GetFeatureInfo", str(data.get("getFeatureInfo", False)).lower())
+                    layer.setCustomProperty("qgis2web/BaseMap", str(data.get("baseMap", False)).lower())
+                    # Save the new ExportRelated property
+                    layer.setCustomProperty("qgis2web/ExportRelated", str(data.get("exportRelated", False)).lower())
+                else:
+                    QgsMessageLog.logMessage(f"Could not find or invalid layer with ID {layer_id} during parameter saving.", "qgis2web", level=Qgis.Warning)
+
         except Exception:
             pass
 
@@ -1003,6 +1049,7 @@ class TreeLayerItem(QTreeWidgetItem):
 
     def __init__(self, iface, layer, tree, dlg):
         QTreeWidgetItem.__init__(self)
+        self.relatedDataCheck = None # Initialize attribute
         self.iface = iface
         self.layer = layer
         self.setText(0, layer.name())
@@ -1158,9 +1205,59 @@ class TreeLayerItem(QTreeWidgetItem):
             else:
                 self.popupItem.setText(0, "")
         
+        # Add Related Data Checkbox (Column 3)
+        if layer.type() == layer.VectorLayer:
+            self.relatedDataCheck = QCheckBox()
+            tree.setItemWidget(self, 2, self.relatedDataCheck) # Add to column index 2
+
+            # Check for relations
+            has_relations = False
+            try:
+                relation_manager = QgsProject.instance().relationManager()
+                # Check if layer ID is valid before querying relations
+                if layer and layer.isValid() and layer.id():
+                    layer_relations = relation_manager.relationsForLayer(layer.id())
+                    # Check if any relation uses this layer as the referencing layer
+                    if layer_relations:
+                        for relation in layer_relations.values():
+                             # Check if the relation is valid and this layer is the referencing one
+                             if relation.isValid() and relation.referencingLayer() and relation.referencingLayer().id() == layer.id():
+                                 has_relations = True
+                                 break # Found at least one valid relation
+                else:
+                    QgsMessageLog.logMessage(f"Layer {layer.name()} is invalid or has no ID, cannot check relations.", "qgis2web", level=Qgis.Warning)
+
+            except Exception as e:
+                 QgsMessageLog.logMessage(f"Error checking relations for layer {layer.name()}: {e}", "qgis2web", level=Qgis.Warning)
+
+
+            if has_relations:
+                self.relatedDataCheck.setEnabled(True)
+                # Read initial state from custom property
+                export_related_prop = layer.customProperty("qgis2web/ExportRelated", "false")
+                initial_state = str(export_related_prop).lower() == 'true'
+                self.relatedDataCheck.setChecked(initial_state)
+                # Connect signal
+                self.relatedDataCheck.stateChanged.connect(self.changeExportRelated)
+            else:
+                self.relatedDataCheck.setEnabled(False)
+                self.relatedDataCheck.setChecked(False) # Ensure it's unchecked if disabled
+                # Optionally set tooltip
+                self.relatedDataCheck.setToolTip("Enable relations for this layer in QGIS Project Properties to activate.")
+        else:
+             # Ensure relatedDataCheck is None for non-vector layers
+             self.relatedDataCheck = None
+
+
         self.emptyRow = QTreeWidgetItem()
         self.addChild(self.emptyRow)
-    
+
+    def changeExportRelated(self, state):
+        """Saves the ExportRelated state to the layer's custom property."""
+        if self.layer and self.relatedDataCheck:
+            # Save as string 'true'/'false' for consistency with other properties
+            self.layer.setCustomProperty("qgis2web/ExportRelated", str(state == Qt.Checked).lower())
+
     @property
     def popup(self):
         popup = []
@@ -1215,6 +1312,13 @@ class TreeLayerItem(QTreeWidgetItem):
             return self.baseMapCheck.isChecked()
         except Exception:
             return False
+
+    @property
+    def exportRelated(self):
+        """Returns the state of the related data checkbox."""
+        if self.relatedDataCheck:
+            return self.relatedDataCheck.isChecked()
+        return False # Default to False if checkbox doesn't exist
 
     def changeJSON(self, isJSON):
         self.layer.setCustomProperty("qgis2web/Encode to JSON", isJSON)

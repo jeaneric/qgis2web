@@ -238,11 +238,59 @@ def extentScript(extent, restrictToExtent):
 def popFuncsScript(table):
     popFuncs = """
             var popupContent = %s;
+            // Add related data if available
+            if (feature.properties.qgis2web_related_data) {
+                try {
+                    var relatedData = JSON.parse(feature.properties.qgis2web_related_data);
+                    // Check if the nested structure exists and has data
+                    if (relatedData && relatedData.qgis2web_related_data && Object.keys(relatedData.qgis2web_related_data).length > 0) {
+                        popupContent += '<hr><h4>Related Data</h4>'; // Add a separator and header
+                        for (var relationName in relatedData.qgis2web_related_data) {
+                            var relatedFeatures = relatedData.qgis2web_related_data[relationName];
+                            if (relatedFeatures && relatedFeatures.length > 0) {
+                                // Use relation name as a sub-header (replace underscores for readability)
+                                popupContent += '<h5>' + relationName.replace(/_/g, ' ') + ' (' + relatedFeatures.length + ')</h5>';
+                                popupContent += '<table class="related-data-table">'; // Add a class for potential styling
+                                // Add table header
+                                var headers = Object.keys(relatedFeatures[0]);
+                                popupContent += '<thead><tr>';
+                                headers.forEach(function(header) {
+                                    // Skip internal qgis2web fields if they exist
+                                    if (!header.startsWith('qgis2web_')) {
+                                        popupContent += '<th>' + header + '</th>';
+                                    }
+                                });
+                                popupContent += '</tr></thead>';
+                                // Add table body
+                                popupContent += '<tbody>';
+                                relatedFeatures.forEach(function(feat) {
+                                    popupContent += '<tr>';
+                                    headers.forEach(function(header) {
+                                         if (!header.startsWith('qgis2web_')) {
+                                            var val = feat[header];
+                                            // Handle null/undefined and linkify
+                                            val = (val !== null && val !== undefined) ? autolinker.link(String(val)) : '';
+                                            popupContent += '<td>' + val + '</td>';
+                                        }
+                                    });
+                                    popupContent += '</tr>';
+                                });
+                                popupContent += '</tbody></table>';
+                            }
+                        }
+                    }
+                } catch (e) {
+                    console.error("Error parsing or displaying related data: ", e);
+                    // Optionally add an error message to the popup
+                    // popupContent += '<p style="color:red;">Error displaying related data.</p>';
+                }
+            }
+            // Process the potentially modified popupContent
             var content = removeEmptyRowsFromPopupContent(popupContent, feature);
-			layer.on('popupopen', function(e) {
-				addClassToPopupIfMedia(content, e.popup);
-			});
-			layer.bindPopup(content, { maxHeight: 400 });""" % table
+            layer.on('popupopen', function(e) {
+                addClassToPopupIfMedia(content, e.popup);
+            });
+            layer.bindPopup(content, { maxHeight: 400 });""" % table
     return popFuncs
 
 
