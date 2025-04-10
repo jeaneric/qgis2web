@@ -367,11 +367,11 @@ class MainDialog(QDialog, FORM_CLASS):
         in the dialog
         """
         writer = self.getWriterFactory()()
-        # Unpack the returned tuple including layersData
+        # Unpack the returned tuple including the new exportRelatedList
         (writer.layers, writer.groups, writer.popup,
          writer.visible, writer.interactive, writer.json,
          writer.cluster, writer.getFeatureInfo, writer.baseMap,
-         writer.layersData) = self.getLayersAndGroups() # Assign layersData to writer
+         writer.exportRelated) = self.getLayersAndGroups() # Assign exportRelatedList to writer.exportRelated
         writer.params = self.getParameters()
         return writer
 
@@ -675,9 +675,9 @@ class MainDialog(QDialog, FORM_CLASS):
     def populateLayerSearch(self):
         self.layer_search_combo.clear()
         self.layer_search_combo.addItem("None")
-        # Adjust unpacking for populateLayerSearch
+        # Adjust unpacking for populateLayerSearch (ignore exportRelatedList)
         (layers, groups, popup, visible, interactive,
-         json, cluster, getFeatureInfo, baseMap, _) = self.getLayersAndGroups() # Ignore layersData here
+         json, cluster, getFeatureInfo, baseMap, _) = self.getLayersAndGroups()
         for count, layer in enumerate(layers):
             if layer.type() == layer.VectorLayer:
                 options = []
@@ -698,9 +698,9 @@ class MainDialog(QDialog, FORM_CLASS):
 
     def populateAttrFilter(self):
         self.layer_filter_select.clear()
-        # Adjust unpacking for populateAttrFilter
+        # Adjust unpacking for populateAttrFilter (ignore exportRelatedList)
         (layers, groups, popup, visible, interactive,
-         json, cluster, getFeatureInfo, baseMap, _) = self.getLayersAndGroups() # Ignore layersData here
+         json, cluster, getFeatureInfo, baseMap, _) = self.getLayersAndGroups()
         options = []
         for count, layer in enumerate(layers):
             if layer.type() == layer.VectorLayer:
@@ -864,7 +864,7 @@ class MainDialog(QDialog, FORM_CLASS):
         cluster = []
         getFeatureInfo = []
         baseMap = []
-        layersData = {} # Dictionary to store per-layer settings including exportRelated
+        exportRelatedList = [] # New list for exportRelated setting
         for i in range(self.layers_item.childCount()):
             item = self.layers_item.child(i)
             if isinstance(item, TreeLayerItem):
@@ -876,22 +876,8 @@ class MainDialog(QDialog, FORM_CLASS):
                     json.append(item.json)
                     cluster.append(item.cluster)
                     getFeatureInfo.append(item.getFeatureInfo)
-                    # Store data for this layer
-                    if item.layer and item.layer.isValid(): # Ensure layer is valid before getting ID
-                        layersData[item.layer.id()] = {
-                            "popup": item.popup,
-                            "visible": item.visible,
-                            "interactive": item.interactive,
-                            "json": item.json,
-                            "cluster": item.cluster,
-                            "getFeatureInfo": item.getFeatureInfo,
-                            "baseMap": item.baseMap,
-                            "exportRelated": item.exportRelated # Add the new property
-                        }
-                    else:
-                         QgsMessageLog.logMessage(f"Skipping invalid layer item in getLayersAndGroups.", "qgis2web", level=Qgis.Warning)
-
                     baseMap.append(item.baseMap)
+                    exportRelatedList.append(item.exportRelated) # Append to the new list
             else:
                 group = item.name
                 groupLayers = []
@@ -910,20 +896,8 @@ class MainDialog(QDialog, FORM_CLASS):
                             cluster.append(allLayers.cluster)
                             getFeatureInfo.append(allLayers.getFeatureInfo)
                             baseMap.append(allLayers.baseMap)
-                            # Store data for this layer within a group
-                            if allLayers.layer and allLayers.layer.isValid(): # Ensure layer is valid
-                                layersData[allLayers.layer.id()] = {
-                                    "popup": allLayers.popup,
-                                    "visible": allLayers.visible,
-                                    "interactive": allLayers.interactive,
-                                    "json": allLayers.json,
-                                    "cluster": allLayers.cluster,
-                                    "getFeatureInfo": allLayers.getFeatureInfo,
-                                    "baseMap": allLayers.baseMap,
-                                    "exportRelated": allLayers.exportRelated # Add the new property
-                                }
-                            else:
-                                QgsMessageLog.logMessage(f"Skipping invalid layer item within group in getLayersAndGroups.", "qgis2web", level=Qgis.Warning)
+                            exportRelatedList.append(allLayers.exportRelated) # Append to the new list
+                            exportRelatedList.append(allLayers.exportRelated) # Append to the new list
                 groups[group] = groupLayers[::-1]
 
         layers = layers[::-1]
@@ -935,35 +909,36 @@ class MainDialog(QDialog, FORM_CLASS):
         cluster = cluster[::-1]
         getFeatureInfo = getFeatureInfo[::-1]
         baseMap = baseMap[::-1]
+        exportRelatedList = exportRelatedList[::-1] # Reverse the new list as well
 
-        # Return layersData dictionary along with other lists/dicts
-        return (layers, groups, popup, visible, interactive, json, cluster, getFeatureInfo, baseMap, layersData)
+        # Return the new list along with the others
+        return (layers, groups, popup, visible, interactive, json, cluster, getFeatureInfo, baseMap, exportRelatedList)
 
     def reject(self):
         self.saveParameters()
-        # Adjust unpacking for reject
+        # Adjust unpacking for reject (include exportRelatedList)
         (layers, groups, popup, visible, interactive,
-         json, cluster, getFeatureInfo, baseMap, layersData) = self.getLayersAndGroups() # Get layersData
+         json, cluster, getFeatureInfo, baseMap, exportRelatedList) = self.getLayersAndGroups()
         try:
-            # Save custom properties using layersData for consistency
-            for layer_id, data in layersData.items():
-                layer = QgsProject.instance().mapLayer(layer_id)
-                if layer and layer.isValid(): # Ensure layer is valid before setting properties
+            # Revert saving logic to use individual lists
+            for layer, pop, vis, inter, js, clus, gfi, bm, expr in zip(
+                    layers, popup, visible, interactive, json, cluster,
+                    getFeatureInfo, baseMap, exportRelatedList):
+                if layer and layer.isValid():
                     # Save popup settings
-                    for attr, setting in data.get("popup", {}).items():
+                    for attr, setting in pop.items():
                         layer.setCustomProperty(f"qgis2web/popup/{attr}", setting)
                     # Save other boolean settings
-                    layer.setCustomProperty("qgis2web/Visible", str(data.get("visible", True)).lower())
-                    layer.setCustomProperty("qgis2web/Interactive", str(data.get("interactive", True)).lower())
-                    layer.setCustomProperty("qgis2web/Encode to JSON", str(data.get("json", False)).lower())
-                    layer.setCustomProperty("qgis2web/Cluster", str(data.get("cluster", False)).lower())
-                    layer.setCustomProperty("qgis2web/GetFeatureInfo", str(data.get("getFeatureInfo", False)).lower())
-                    layer.setCustomProperty("qgis2web/BaseMap", str(data.get("baseMap", False)).lower())
+                    layer.setCustomProperty("qgis2web/Visible", str(vis).lower())
+                    layer.setCustomProperty("qgis2web/Interactive", str(inter).lower())
+                    layer.setCustomProperty("qgis2web/Encode to JSON", str(js).lower())
+                    layer.setCustomProperty("qgis2web/Cluster", str(clus).lower())
+                    layer.setCustomProperty("qgis2web/GetFeatureInfo", str(gfi).lower())
+                    layer.setCustomProperty("qgis2web/BaseMap", str(bm).lower())
                     # Save the new ExportRelated property
-                    layer.setCustomProperty("qgis2web/ExportRelated", str(data.get("exportRelated", False)).lower())
+                    layer.setCustomProperty("qgis2web/ExportRelated", str(expr).lower())
                 else:
-                    QgsMessageLog.logMessage(f"Could not find or invalid layer with ID {layer_id} during parameter saving.", "qgis2web", level=Qgis.Warning)
-
+                     QgsMessageLog.logMessage(f"Skipping invalid layer during parameter saving.", "qgis2web", level=Qgis.Warning)
         except Exception:
             pass
 
