@@ -864,7 +864,7 @@ class MainDialog(QDialog, FORM_CLASS):
         cluster = []
         getFeatureInfo = []
         baseMap = []
-        exportRelatedList = [] # New list for exportRelated setting
+        exportRelatedList = []
         for i in range(self.layers_item.childCount()):
             item = self.layers_item.child(i)
             if isinstance(item, TreeLayerItem):
@@ -877,7 +877,7 @@ class MainDialog(QDialog, FORM_CLASS):
                     cluster.append(item.cluster)
                     getFeatureInfo.append(item.getFeatureInfo)
                     baseMap.append(item.baseMap)
-                    exportRelatedList.append(item.exportRelated) # Append to the new list
+                    exportRelatedList.append(item.exportRelated)
             else:
                 group = item.name
                 groupLayers = []
@@ -896,8 +896,7 @@ class MainDialog(QDialog, FORM_CLASS):
                             cluster.append(allLayers.cluster)
                             getFeatureInfo.append(allLayers.getFeatureInfo)
                             baseMap.append(allLayers.baseMap)
-                            exportRelatedList.append(allLayers.exportRelated) # Append to the new list
-                            exportRelatedList.append(allLayers.exportRelated) # Append to the new list
+                            exportRelatedList.append(allLayers.exportRelated)
                 groups[group] = groupLayers[::-1]
 
         layers = layers[::-1]
@@ -921,7 +920,7 @@ class MainDialog(QDialog, FORM_CLASS):
          json, cluster, getFeatureInfo, baseMap, exportRelatedList) = self.getLayersAndGroups()
         try:
             # Revert saving logic to use individual lists
-            for layer, pop, vis, inter, js, clus, gfi, bm, expr in zip(
+            for layer, pop, vis, inter, js, clus, gfi, bm, exportRelated in zip(
                     layers, popup, visible, interactive, json, cluster,
                     getFeatureInfo, baseMap, exportRelatedList):
                 if layer and layer.isValid():
@@ -936,7 +935,7 @@ class MainDialog(QDialog, FORM_CLASS):
                     layer.setCustomProperty("qgis2web/GetFeatureInfo", str(gfi).lower())
                     layer.setCustomProperty("qgis2web/BaseMap", str(bm).lower())
                     # Save the new ExportRelated property
-                    layer.setCustomProperty("qgis2web/ExportRelated", str(expr).lower())
+                    layer.setCustomProperty("qgis2web/ExportRelated", str(exportRelated).lower())
                 else:
                      QgsMessageLog.logMessage(f"Skipping invalid layer during parameter saving.", "qgis2web", level=Qgis.Warning)
         except Exception:
@@ -1024,7 +1023,6 @@ class TreeLayerItem(QTreeWidgetItem):
 
     def __init__(self, iface, layer, tree, dlg):
         QTreeWidgetItem.__init__(self)
-        self.relatedDataCheck = None # Initialize attribute
         self.iface = iface
         self.layer = layer
         self.setText(0, layer.name())
@@ -1055,7 +1053,62 @@ class TreeLayerItem(QTreeWidgetItem):
         self.visibleItem.setText(0, "Visible")
         self.addChild(self.visibleItem)
         tree.setItemWidget(self.visibleItem, 1, self.visibleCheck)
-                
+
+        # Add Related Data Checkbox (Column 3)
+        if layer.type() == layer.VectorLayer:
+            self.relatedDataItem = QTreeWidgetItem(self)
+            self.relatedDataCheck = QCheckBox()
+            has_relations = False
+            # Check for relations
+            try:
+                relation_manager = QgsProject.instance().relationManager()
+                # Check if layer ID is valid before querying relations
+                if layer and layer.isValid() and layer.id():
+                    # Replace relationsForLayer with the correct approach
+                    all_relations = relation_manager.relations()
+                    # Check if layer is a referencing layer (has foreign keys)
+                    referencing_relations = [rel for rel in all_relations.values() 
+                                            if rel.referencingLayer() and rel.referencingLayer().id() == layer.id()]
+                    
+                    # Check if layer is a referenced layer (primary key is referenced by other layers)
+                    referenced_relations = [rel for rel in all_relations.values() 
+                                            if rel.referencedLayer() and rel.referencedLayer().id() == layer.id()]
+                    
+                    # Combine both types of relations
+                    layer_relations = referencing_relations + referenced_relations
+                    
+                    # Check if there are any valid relations
+                    if layer_relations:
+                        for relation in layer_relations:
+                            if relation.isValid():
+                                has_relations = True
+                                break  # Found at least one valid relation
+                else:
+                    QgsMessageLog.logMessage(f"Layer {layer.name()} is invalid or has no ID, cannot check relations.", "qgis2web", level=Qgis.Warning)
+            except Exception as e:
+                QgsMessageLog.logMessage(f"Error checking relations for layer {layer.name()}: {e}", "qgis2web", level=Qgis.Warning)
+
+            if has_relations:
+                self.relatedDataCheck.setEnabled(True)
+                # Read initial state from custom property
+                export_related_prop = layer.customProperty("qgis2web/ExportRelated", "false")
+                initial_state = str(export_related_prop).lower() == 'true'
+                self.relatedDataCheck.setChecked(initial_state)
+                # Connect signal
+                self.relatedDataCheck.stateChanged.connect(self.changeExportRelated)
+            else:
+                self.relatedDataCheck.setEnabled(False)
+                self.relatedDataCheck.setChecked(False) # Ensure it's unchecked if disabled
+                # Optionally set tooltip
+                self.relatedDataCheck.setToolTip("Enable relations for this layer in QGIS Project Properties to activate.")
+            self.relatedDataItem.setText(0, "Export Related Data")
+            self.addChild(self.relatedDataItem)  # Uncommenting to add the related data item
+            tree.setItemWidget(self.relatedDataItem, 1, self.relatedDataCheck)  # Uncommenting to set the widget
+
+        else:
+            # Ensure relatedDataCheck is None for non-vector layers
+            self.relatedDataCheck = None
+            
         if layer.type() == layer.VectorLayer:
             if layer.providerType() == 'WFS':
                 self.jsonItem = QTreeWidgetItem(self)
@@ -1179,50 +1232,6 @@ class TreeLayerItem(QTreeWidgetItem):
                 self.addChild(self.popupItem)
             else:
                 self.popupItem.setText(0, "")
-        
-        # Add Related Data Checkbox (Column 3)
-        if layer.type() == layer.VectorLayer:
-            self.relatedDataCheck = QCheckBox()
-            tree.setItemWidget(self, 2, self.relatedDataCheck) # Add to column index 2
-
-            # Check for relations
-            has_relations = False
-            try:
-                relation_manager = QgsProject.instance().relationManager()
-                # Check if layer ID is valid before querying relations
-                if layer and layer.isValid() and layer.id():
-                    layer_relations = relation_manager.relationsForLayer(layer.id())
-                    # Check if any relation uses this layer as the referencing layer
-                    if layer_relations:
-                        for relation in layer_relations.values():
-                             # Check if the relation is valid and this layer is the referencing one
-                             if relation.isValid() and relation.referencingLayer() and relation.referencingLayer().id() == layer.id():
-                                 has_relations = True
-                                 break # Found at least one valid relation
-                else:
-                    QgsMessageLog.logMessage(f"Layer {layer.name()} is invalid or has no ID, cannot check relations.", "qgis2web", level=Qgis.Warning)
-
-            except Exception as e:
-                 QgsMessageLog.logMessage(f"Error checking relations for layer {layer.name()}: {e}", "qgis2web", level=Qgis.Warning)
-
-
-            if has_relations:
-                self.relatedDataCheck.setEnabled(True)
-                # Read initial state from custom property
-                export_related_prop = layer.customProperty("qgis2web/ExportRelated", "false")
-                initial_state = str(export_related_prop).lower() == 'true'
-                self.relatedDataCheck.setChecked(initial_state)
-                # Connect signal
-                self.relatedDataCheck.stateChanged.connect(self.changeExportRelated)
-            else:
-                self.relatedDataCheck.setEnabled(False)
-                self.relatedDataCheck.setChecked(False) # Ensure it's unchecked if disabled
-                # Optionally set tooltip
-                self.relatedDataCheck.setToolTip("Enable relations for this layer in QGIS Project Properties to activate.")
-        else:
-             # Ensure relatedDataCheck is None for non-vector layers
-             self.relatedDataCheck = None
-
 
         self.emptyRow = QTreeWidgetItem()
         self.addChild(self.emptyRow)
@@ -1257,6 +1266,13 @@ class TreeLayerItem(QTreeWidgetItem):
         return self.visibleCheck.isChecked()
 
     @property
+    def exportRelated(self):
+        """Returns the state of the related data checkbox."""
+        if self.relatedDataCheck:
+            return self.relatedDataCheck.isChecked()
+        return False # Default to False if checkbox doesn't exist
+
+    @property
     def interactive(self):
         return self.interactiveCheck.isChecked()
 
@@ -1287,14 +1303,7 @@ class TreeLayerItem(QTreeWidgetItem):
             return self.baseMapCheck.isChecked()
         except Exception:
             return False
-
-    @property
-    def exportRelated(self):
-        """Returns the state of the related data checkbox."""
-        if self.relatedDataCheck:
-            return self.relatedDataCheck.isChecked()
-        return False # Default to False if checkbox doesn't exist
-
+    
     def changeJSON(self, isJSON):
         self.layer.setCustomProperty("qgis2web/Encode to JSON", isJSON)
 

@@ -187,8 +187,8 @@ class LeafletWriter(Writer):
         crs = QgsCoordinateReferenceSystem.EpsgCrsId
         exp_crs = QgsCoordinateReferenceSystem(4326, crs)
         lyrCount = 0
-        for layer, jsonEncode, eachPopup, clst in zip(layer_list, json,
-                                                      popup, cluster):
+        for layer, jsonEncode, eachPopup, clst, exportRelated in zip(layer_list, json,
+                                                      popup, cluster, exportRelatedList):
             rawLayerName = layer.name()
             safeLayerName = safeName(rawLayerName) + "_" + str(lyrCount)
             vts = layer.customProperty("VectorTilesReader/vector_tile_url")
@@ -196,8 +196,6 @@ class LeafletWriter(Writer):
                 if layer.type() == QgsMapLayer.VectorLayer and vts is None:
                     feedback.showFeedback('Exporting %s to JSON...' %
                                           layer.name())
-                    # Get exportRelated flag from the corresponding index in exportRelatedList
-                    exportRelated = exportRelatedList[lyrCount] if lyrCount < len(exportRelatedList) else False
                     exportVector(layer, safeLayerName, dataStore,
                                  restrictToExtent, iface, extent, precision,
                                  exp_crs, minify, exportRelated) # Pass exportRelated flag

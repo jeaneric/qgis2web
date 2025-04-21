@@ -241,15 +241,15 @@ def popFuncsScript(table):
             // Add related data if available
             if (feature.properties.qgis2web_related_data) {
                 try {
-                    var relatedData = JSON.parse(feature.properties.qgis2web_related_data);
+                    var relatedData = feature.properties.qgis2web_related_data;
                     // Check if the nested structure exists and has data
-                    if (relatedData && relatedData.qgis2web_related_data && Object.keys(relatedData.qgis2web_related_data).length > 0) {
-                        popupContent += '<hr><h4>Related Data</h4>'; // Add a separator and header
-                        for (var relationName in relatedData.qgis2web_related_data) {
-                            var relatedFeatures = relatedData.qgis2web_related_data[relationName];
+                    if (relatedData && Object.keys(relatedData).length > 0) {
+                        // popupContent += '<hr><h3>Related Data</h3>'; // Add a separator and header
+                        for (var relationName in relatedData) {
+                            var relatedFeatures = relatedData[relationName];
                             if (relatedFeatures && relatedFeatures.length > 0) {
                                 // Use relation name as a sub-header (replace underscores for readability)
-                                popupContent += '<h5>' + relationName.replace(/_/g, ' ') + ' (' + relatedFeatures.length + ')</h5>';
+                                popupContent += '<hr><h4>' + relationName.replace(/_/g, ' ') + ' (' + relatedFeatures.length + ')</h4>';
                                 popupContent += '<table class="related-data-table">'; // Add a class for potential styling
                                 // Add table header
                                 var headers = Object.keys(relatedFeatures[0]);

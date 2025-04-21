@@ -162,45 +162,55 @@ def get_related_data(layer, feature):
         dict: A dictionary structured as {'qgis2web_related_data': {'relation_name1': [attr_dict1, ...], 'relation_name2': [...]}}
               Returns an empty dict if no relations or related features are found.
     """
-    related_data_map = {}
+    QgsMessageLog.logMessage(f"a1 - get_related_data", "qgis2web", level=Qgis.Warning)
+
     all_relations_data = {}
     relation_manager = QgsProject.instance().relationManager()
-    # Ensure layer ID is valid before querying relations
-    if not layer or not layer.isValid() or not layer.id():
-        return related_data_map
+    
+    # Combine both referencing and referenced relations
+    all_relations = relation_manager.relations()
 
-    layer_relations = relation_manager.relationsForLayer(layer.id())
-
-    if not layer_relations:
-        return related_data_map
-
-    for relation in layer_relations.values():
+    for relation in all_relations.values() :
         # Ensure the current layer is the referencing layer in the relation
+        # Check if this layer is either the referencing layer or the referenced layer in the relation
         if relation.referencingLayer() and relation.referencingLayer().id() == layer.id():
             relation_name_sanitized = safeName(relation.name()) # Use existing safeName function
-            related_features_data = []
             # Use the feature's specific value for the referencing field
+            related_layer = relation.referencedLayer() # The layer containing child features
+            try:
+                request = relation.getReferencedFeatureRequest(feature)
+            except Exception as e:
+                QgsMessageLog.logMessage(f"Error getting related features request for relation '{relation.name()}', Feature: {feature.id()}': {e}", "qgis2web", level=Qgis.Warning)
+                continue # Skip this relation if request fails
+            QgsMessageLog.logMessage(f"b1 - {relation_name_sanitized} - {request}", "qgis2web", level=Qgis.Warning)
+        elif relation.referencedLayer() and relation.referencedLayer().id() == layer.id():
+            relation_name_sanitized = safeName(relation.name()) # Use existing safeName function
+            # For referenced layer case - current feature is in the parent layer
+            referencing_layer = relation.referencingLayer()
+            related_layer = referencing_layer  # For code consistency below
+            # Use the feature's specific value for the referenced field
             try:
                 request = relation.getRelatedFeaturesRequest(feature)
             except Exception as e:
-                QgsMessageLog.logMessage(f"Error getting related features request for relation '{relation.name()}': {e}", "qgis2web", level=Qgis.Warning)
-                continue # Skip this relation if request fails
-
-            related_layer = relation.referencedLayer() # The layer containing child features
-
-            if not related_layer or not related_layer.isValid():
-                QgsMessageLog.logMessage(f"Relation '{relation.name()}' points to an invalid referenced layer.", "qgis2web", level=Qgis.Warning)
-                continue # Skip if related layer is invalid
-
+                QgsMessageLog.logMessage(f"Error getting related features request for relation '{relation.name()}', Feature: {feature.id()}': {e}", "qgis2web", level=Qgis.Warning)
+                continue
+            QgsMessageLog.logMessage(f"b2 - {relation_name_sanitized} - {request}", "qgis2web", level=Qgis.Warning)
+        else:
+            # This relation doesn't involve the current layer
+            continue
+        
+        if related_layer:
+            related_features_data = []
             try:
+
                 related_layer_fields = related_layer.fields() # Get fields once
                 field_names = [field.name() for field in related_layer_fields]
                 for related_feature in related_layer.getFeatures(request):
                     attributes = related_feature.attributes()
                     # Ensure attributes list length matches field names length
                     if len(attributes) != len(field_names):
-                         QgsMessageLog.logMessage(f"Attribute count mismatch for feature {related_feature.id()} in layer '{related_layer.name()}'. Skipping feature.", "qgis2web", level=Qgis.Warning)
-                         continue
+                        QgsMessageLog.logMessage(f"Attribute count mismatch for feature {related_feature.id()} in layer '{related_layer.name()}'. Skipping feature.", "qgis2web", level=Qgis.Warning)
+                        continue
 
                     feature_attributes_dict = {}
                     for i, field_name in enumerate(field_names):
@@ -213,33 +223,27 @@ def get_related_data(layer, feature):
                             elif value.type() == QVariant.Date or value.type() == QVariant.DateTime or value.type() == QVariant.Time:
                                 # Use ISO format for dates/times if Qt is available
                                 try:
-                                     feature_attributes_dict[field_name] = value.toString(Qt.ISODate)
+                                    feature_attributes_dict[field_name] = value.toString(Qt.ISODate)
                                 except NameError: # Fallback if Qt not imported or available
-                                     feature_attributes_dict[field_name] = value.toString()
+                                    feature_attributes_dict[field_name] = value.toString()
                             elif value.canConvert(QVariant.String):
                                 feature_attributes_dict[field_name] = value.toString()
                             else:
                                 # Fallback for types that can't be easily converted to string
                                 feature_attributes_dict[field_name] = f"Unsupported type: {value.typeName()}"
                         else:
-                             # Handle potential non-QVariant types if necessary (e.g., None directly)
-                             feature_attributes_dict[field_name] = value
+                            # Handle potential non-QVariant types if necessary (e.g., None directly)
+                            feature_attributes_dict[field_name] = value
 
                     related_features_data.append(feature_attributes_dict)
             except Exception as e:
-                 QgsMessageLog.logMessage(f"Error processing features for relation '{relation.name()}' on layer '{related_layer.name()}': {e}", "qgis2web", level=Qgis.Warning)
-                 continue # Skip this relation if feature processing fails
-
+                QgsMessageLog.logMessage(f"Error processing features for relation '{relation.name()}' on layer '{related_layer.name()}': {e}", "qgis2web", level=Qgis.Warning)
+                continue # Skip this relation if feature processing fails
 
             if related_features_data:
                 all_relations_data[relation_name_sanitized] = related_features_data
 
-    if all_relations_data:
-        # Nest all relation data under the main key 'qgis2web_related_data'
-        related_data_map['qgis2web_related_data'] = all_relations_data
-
-    return related_data_map
-
+    return all_relations_data
 
 
 def writeTmpLayer(layer, restrictToExtent, iface, extent, exportRelated=False): # Added exportRelated flag
@@ -316,6 +320,7 @@ def writeTmpLayer(layer, restrictToExtent, iface, extent, exportRelated=False): 
             outFeat.setGeometry(feature.geometry())
         attrs = [feature[f] for f in usedFields]
         # Fetch and add related data if enabled
+        QgsMessageLog.logMessage(f"a1 - {layer.name()} feature ID: {feature.id()} - {exportRelated}", "qgis2web", level=Qgis.Warning)
         if exportRelated and related_data_field_index != -1:
             try:
                 related_data = get_related_data(layer, feature)
@@ -353,11 +358,8 @@ def exportLayers(iface, layers, folder, precision, optimize, popupField, json,
     feedback.showFeedback('Exporting layers...')
     layersFolder = os.path.join(folder, "layers")
     QDir().mkpath(layersFolder)
-    for count, (layer, encode2json, popup) in enumerate(zip(layers, json, popupField)):
+    for count, (layer, encode2json, popup, exportRelated) in enumerate(zip(layers, json, popupField, exportRelatedList)):
         sln = safeName(layer.name()) + "_" + str(count)
-        # Get exportRelated flag from the corresponding index in exportRelatedList
-        exportRelated = exportRelatedList[count] if count < len(exportRelatedList) else False
-
         vts = layer.customProperty("VectorTilesReader/vector_tile_source")
         if (layer.type() == layer.VectorLayer and vts is None and
                 (layer.providerType() != "WFS" or encode2json)):
@@ -378,7 +380,6 @@ def exportLayers(iface, layers, folder, precision, optimize, popupField, json,
 def exportVector(layer, sln, layersFolder, restrictToExtent, iface,
                   extent, precision, crs, minify, exportRelated=False): # Added exportRelated flag
     canvas = iface.mapCanvas()
-    # Pass the exportRelated flag to writeTmpLayer
     cleanLayer = writeTmpLayer(layer, restrictToExtent, iface, extent, exportRelated)
     # Check if cleanLayer was created successfully
     if cleanLayer is None:

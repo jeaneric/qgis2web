@@ -49,6 +49,8 @@ class Writer(object):
         self.layers = []
         # list of whether each layer is visible
         self.visible = []
+        # list of whether each layer export relations
+        self.exportRelated = []
         # list of whether each layer is interactive
         self.interactive = []
         # list of whether each layer should be clustered
